@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { deleteCategoryAction } from "@/actions/categories";
 import { Edit2, Trash2, Loader2 } from "lucide-react";
-import { CategoryStatus } from "@prisma/client";
+import type { CategoryStatus } from "@prisma/client";
 import { resolveImageUrl } from "@/lib/utils";
 import { useAdminPath } from "@/components/admin/AdminPathContext";
 

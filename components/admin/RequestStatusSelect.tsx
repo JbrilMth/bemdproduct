@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { updateRequestStatusAction } from "@/actions/requests";
-import { RequestStatus } from "@prisma/client";
+import type { RequestStatus } from "@prisma/client";
 import { Loader2 } from "lucide-react";
 
 interface RequestStatusSelectProps {

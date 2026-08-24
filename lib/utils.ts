@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { RequestStatus, ProductStatus, CategoryStatus } from "@prisma/client";
+import type { RequestStatus, ProductStatus, CategoryStatus } from "@prisma/client";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -39,41 +39,41 @@ export function formatDateTime(date: Date | string): string {
   }).format(d);
 }
 
-export function getRequestStatusBadgeClass(status: RequestStatus): string {
+export function getRequestStatusBadgeClass(status: RequestStatus | string): string {
   switch (status) {
-    case RequestStatus.NEW:
+    case "NEW":
       return "bg-blue-50 text-blue-700 border-blue-200";
-    case RequestStatus.REVIEWING:
+    case "REVIEWING":
       return "bg-amber-50 text-amber-700 border-amber-200";
-    case RequestStatus.PROCESSING:
+    case "PROCESSING":
       return "bg-purple-50 text-purple-700 border-purple-200";
-    case RequestStatus.COMPLETED:
+    case "COMPLETED":
       return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case RequestStatus.CANCELLED:
+    case "CANCELLED":
       return "bg-zinc-100 text-zinc-600 border-zinc-200";
     default:
       return "bg-zinc-100 text-zinc-700 border-zinc-200";
   }
 }
 
-export function getProductStatusBadgeClass(status: ProductStatus): string {
+export function getProductStatusBadgeClass(status: ProductStatus | string): string {
   switch (status) {
-    case ProductStatus.PUBLISHED:
+    case "PUBLISHED":
       return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case ProductStatus.DRAFT:
+    case "DRAFT":
       return "bg-amber-50 text-amber-700 border-amber-200";
-    case ProductStatus.ARCHIVED:
+    case "ARCHIVED":
       return "bg-zinc-100 text-zinc-600 border-zinc-200";
     default:
       return "bg-zinc-100 text-zinc-700 border-zinc-200";
   }
 }
 
-export function getCategoryStatusBadgeClass(status: CategoryStatus): string {
+export function getCategoryStatusBadgeClass(status: CategoryStatus | string): string {
   switch (status) {
-    case CategoryStatus.ACTIVE:
+    case "ACTIVE":
       return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case CategoryStatus.INACTIVE:
+    case "INACTIVE":
       return "bg-zinc-100 text-zinc-600 border-zinc-200";
     default:
       return "bg-zinc-100 text-zinc-700 border-zinc-200";

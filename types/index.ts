@@ -1,4 +1,4 @@
-import {
+import type {
   Category,
   Product,
   ProductImage,
@@ -14,13 +14,6 @@ import {
   RequestStatus,
 } from "@prisma/client";
 
-export {
-  CategoryStatus,
-  ProductStatus,
-  RequestType,
-  RequestStatus,
-};
-
 export type {
   Category,
   Product,
@@ -31,6 +24,10 @@ export type {
   CustomerRequest,
   RequestImage,
   AdminUser,
+  CategoryStatus,
+  ProductStatus,
+  RequestType,
+  RequestStatus,
 };
 
 // Extended types for Categories

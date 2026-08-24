@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createProductAction, updateProductAction } from "@/actions/products";
 import { slugify } from "@/lib/utils";
-import { ProductStatus } from "@prisma/client";
+import type { ProductStatus } from "@prisma/client";
 import {
   Plus,
   Trash2,

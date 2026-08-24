@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createCategoryAction, updateCategoryAction } from "@/actions/categories";
 import { slugify } from "@/lib/utils";
-import { CategoryStatus } from "@prisma/client";
+import type { CategoryStatus } from "@prisma/client";
 import { Loader2, Save, ArrowLeft, AlertCircle } from "lucide-react";
 import Link from "next/link";
 import { ImageUploader, UploadedImageItem } from "@/components/admin/ImageUploader";

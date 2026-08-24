@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { deleteProductAction, toggleProductStatusAction } from "@/actions/products";
-import { ProductStatus } from "@prisma/client";
+import type { ProductStatus } from "@prisma/client";
 import { Edit2, Trash2, Eye, Loader2, Package } from "lucide-react";
 import { formatDate, resolveImageUrl } from "@/lib/utils";
 import { useAdminPath } from "@/components/admin/AdminPathContext";

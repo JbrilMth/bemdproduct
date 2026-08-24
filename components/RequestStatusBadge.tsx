@@ -1,4 +1,4 @@
-import { RequestStatus } from "@prisma/client";
+import type { RequestStatus } from "@prisma/client";
 import { getRequestStatusBadgeClass } from "@/lib/utils";
 
 interface RequestStatusBadgeProps {
