@@ -1,0 +1,182 @@
+// Prisma Schema for China Product Discovery & Sourcing Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ----------------------------------------------------
+// Enums
+// ----------------------------------------------------
+
+enum CategoryStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ProductStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum RequestType {
+  QUOTATION_REQUEST
+  SOURCING_REQUEST
+}
+
+enum RequestStatus {
+  NEW
+  REVIEWING
+  PROCESSING
+  COMPLETED
+  CANCELLED
+}
+
+// ----------------------------------------------------
+// Models
+// ----------------------------------------------------
+
+model Category {
+  id          String         @id @default(cuid())
+  name        String
+  slug        String         @unique
+  description String?        @db.Text
+  imageUrl    String?
+  storageKey  String?
+  parentId    String?
+  parent      Category?      @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children    Category[]     @relation("CategoryHierarchy")
+  products    Product[]
+  status      CategoryStatus @default(ACTIVE)
+  sortOrder   Int            @default(0)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([parentId])
+  @@index([slug])
+  @@index([status])
+}
+
+model Product {
+  id               String                 @id @default(cuid())
+  name             String
+  slug             String                 @unique
+  shortDescription String?                @db.Text
+  description      String                 @db.Text
+  categoryId       String
+  category         Category               @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  status           ProductStatus          @default(DRAFT)
+  isFeatured       Boolean                @default(false)
+  isNew            Boolean                @default(false)
+  isTrending       Boolean                @default(false)
+  images           ProductImage[]
+  specifications   ProductSpecification[]
+  tags             ProductTag[]
+  requests         CustomerRequest[]
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([categoryId])
+  @@index([slug])
+  @@index([status])
+  @@index([isFeatured])
+  @@index([isTrending])
+  @@index([isNew])
+}
+
+model ProductImage {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  imageUrl   String
+  storageKey String?
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([productId])
+}
+
+model ProductSpecification {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name      String
+  value     String
+  sortOrder Int     @default(0)
+
+  @@index([productId])
+}
+
+model Tag {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  slug      String       @unique
+  products  ProductTag[]
+  createdAt DateTime     @default(now())
+
+  @@index([slug])
+}
+
+model ProductTag {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  tagId     String
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, tagId])
+  @@index([productId])
+  @@index([tagId])
+}
+
+model CustomerRequest {
+  id            String         @id @default(cuid())
+  type          RequestType
+  productName   String?
+  productId     String?
+  product       Product?       @relation(fields: [productId], references: [id], onDelete: SetNull)
+  customerName  String
+  companyName   String?
+  country       String
+  whatsapp      String
+  email         String
+  quantity      String
+  message       String         @db.Text
+  internalNotes String?        @db.Text
+  status        RequestStatus  @default(NEW)
+  images        RequestImage[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([productId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model RequestImage {
+  id         String          @id @default(cuid())
+  requestId  String
+  request    CustomerRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  imageUrl   String
+  storageKey String?
+  createdAt  DateTime        @default(now())
+
+  @@index([requestId])
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("ADMIN")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([email])
+}
