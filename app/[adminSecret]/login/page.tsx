@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { adminLoginAction } from "@/actions/auth";
-import { Lock, Mail, AlertCircle, Loader2, ShieldCheck } from "lucide-react";
+import { Lock, Mail, AlertCircle, Loader2, ShieldCheck, CheckCircle2 } from "lucide-react";
 
 import { useAdminPath } from "@/components/admin/AdminPathContext";
 
@@ -14,6 +14,13 @@ export default function AdminLoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("message");
+    }
+    return null;
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,6 +52,13 @@ export default function AdminLoginPage() {
             Sign in to manage catalog products, categories, and customer sourcing requests.
           </p>
         </div>
+
+        {successMsg && (
+          <div className="flex items-center gap-2 border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+            <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-emerald-600" />
+            <span>{successMsg}</span>
+          </div>
+        )}
 
         {errorMsg && (
           <div className="flex items-center gap-2 border border-red-200 bg-red-50 p-3 text-xs text-red-700">

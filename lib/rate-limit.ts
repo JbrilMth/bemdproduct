@@ -301,3 +301,14 @@ export const mediaStreamRateLimiter = new MemoryRateLimiter(
   },
   5000
 );
+
+// 5. Password Change: 5 attempts per 15 minutes per (adminId + client IP)
+export const passwordChangeRateLimiter = new MemoryRateLimiter(
+  {
+    name: "password-change",
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    maxRequests: 5,
+  },
+  1000
+);
+

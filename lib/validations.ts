@@ -151,3 +151,50 @@ export const updateRequestInternalNotesSchema = z.object({
   requestId: z.string().min(1, "Request ID is required").max(100),
   internalNotes: z.string().max(10000, "Internal notes cannot exceed 10,000 characters"),
 });
+
+// Known weak/default passwords blocklist
+export const BLOCKED_PASSWORDS = [
+  "adminpassword123!",
+  "password",
+  "password123",
+  "admin",
+  "administrator",
+  "changeme",
+  "qwerty",
+  "123456",
+  "12345678",
+  "123456789",
+];
+
+// Admin Change Password Schema
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z
+      .string()
+      .min(1, "Current password is required")
+      .refine(
+        (val) => Buffer.byteLength(val, "utf8") <= 72,
+        "Current password cannot exceed 72 bytes"
+      ),
+    newPassword: z
+      .string()
+      .min(15, "New password must be at least 15 characters")
+      .refine(
+        (val) => Buffer.byteLength(val, "utf8") <= 72,
+        "Password exceeds 72 UTF-8 bytes limit"
+      )
+      .refine(
+        (val) => val.trim().length > 0,
+        "Password cannot consist entirely of whitespace"
+      )
+      .refine(
+        (val) => !BLOCKED_PASSWORDS.includes(val.toLowerCase()),
+        "Choose a stronger password."
+      ),
+    confirmPassword: z.string().min(1, "Please confirm your new password"),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: "New passwords do not match.",
+    path: ["confirmPassword"],
+  });
+

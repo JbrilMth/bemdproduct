@@ -76,6 +76,7 @@ export async function adminLoginAction(formData: unknown): Promise<ActionResult>
       id: user.id,
       email: user.email,
       name: user.name,
+      sessionVersion: user.sessionVersion,
     });
 
     return {

@@ -1,6 +1,7 @@
 import { isR2Configured } from "@/lib/storage";
 import { getAdminSession } from "@/actions/auth";
-import { HardDrive, Shield, CheckCircle2 } from "lucide-react";
+import { HardDrive, Shield, CheckCircle2, KeyRound } from "lucide-react";
+import { ChangePasswordForm } from "@/components/admin/ChangePasswordForm";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -118,6 +119,24 @@ export default async function AdminSettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* 3. Security: Change Password */}
+      <div className="border border-neutral-200 bg-white p-6 space-y-4">
+        <div className="flex items-center gap-2.5 border-b border-neutral-100 pb-3">
+          <KeyRound className="h-5 w-5 text-neutral-900" />
+          <div>
+            <h3 className="text-sm font-bold text-neutral-900">
+              Security
+            </h3>
+            <p className="text-xs text-neutral-500">
+              Change Password
+            </p>
+          </div>
+        </div>
+
+        <ChangePasswordForm />
+      </div>
     </div>
   );
 }
+

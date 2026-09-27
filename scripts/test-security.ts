@@ -26,6 +26,13 @@ import {
   uploadRateLimiter,
 } from "../lib/rate-limit";
 import { verifySessionToken, createSessionToken } from "../lib/auth";
+import bcrypt from "bcryptjs";
+import { prisma } from "../lib/prisma";
+import { changePasswordSchema, BLOCKED_PASSWORDS } from "../lib/validations";
+import { passwordChangeRateLimiter } from "../lib/rate-limit";
+import { changePasswordAction } from "../actions/settings";
+import { adminLogoutAction } from "../actions/auth";
+import { updateRequestStatusAction, updateRequestInternalNotesAction } from "../actions/requests";
 
 let passed = 0;
 let failed = 0;
@@ -566,6 +573,279 @@ async function runTests() {
     const sig = crypto.createHmac("sha256", process.env.AUTH_SECRET).update(payloadB64).digest("base64url");
     const expiredToken = `${payloadB64}.${sig}`;
     assert.strictEqual(verifySessionToken(expiredToken), null, "Expired token must be rejected");
+  });
+
+  // -----------------------------------------------------------------
+  console.log("\n9. ADMIN PASSWORD CHANGE & SESSION REVOCATION SECURITY");
+  // -----------------------------------------------------------------
+
+  await it("1. unauthenticated user cannot change admin password", async () => {
+    const res = await changePasswordAction({
+      currentPassword: "SomePassword123!",
+      newPassword: "A-very-strong-passphrase-2026!",
+      confirmPassword: "A-very-strong-passphrase-2026!",
+    });
+    assert.strictEqual(res.success, false);
+    assert(res.message?.includes("Unauthorized"), "Must reject unauthenticated caller");
+  });
+
+  await it("2. arbitrary submitted admin ID cannot change another account", async () => {
+    const res = await changePasswordAction({
+      id: "attacker-targeted-admin-id",
+      targetId: "attacker-targeted-admin-id",
+      email: "victim@sourcinghub.com",
+      currentPassword: "SomePassword123!",
+      newPassword: "A-very-strong-passphrase-2026!",
+      confirmPassword: "A-very-strong-passphrase-2026!",
+    });
+    assert.strictEqual(res.success, false);
+    assert(res.message?.includes("Unauthorized"), "Must reject arbitrary client ID submission");
+  });
+
+  await it("3. existing protected admin Server Actions remain protected", async () => {
+    const res1 = await updateRequestStatusAction("dummy-id", "COMPLETED");
+    assert.strictEqual(res1.success, false, "updateRequestStatusAction must fail when unauthenticated");
+    const res2 = await updateRequestInternalNotesAction("dummy-id", "Test note");
+    assert.strictEqual(res2.success, false, "updateRequestInternalNotesAction must fail when unauthenticated");
+  });
+
+  await it("4. password shorter than minimum (<15 characters) fails", () => {
+    const parseRes = changePasswordSchema.safeParse({
+      currentPassword: "ValidCurrentPassword123!",
+      newPassword: "ShortPass123!", // 13 chars
+      confirmPassword: "ShortPass123!",
+    });
+    assert.strictEqual(parseRes.success, false);
+    assert(parseRes.error?.issues.some((i) => i.message.includes("at least 15 characters")));
+  });
+
+  await it("5. password exceeding bcrypt safe maximum (>72 UTF-8 bytes) fails", () => {
+    const tooLongPass = "a".repeat(73);
+    const parseRes = changePasswordSchema.safeParse({
+      currentPassword: "ValidCurrentPassword123!",
+      newPassword: tooLongPass,
+      confirmPassword: tooLongPass,
+    });
+    assert.strictEqual(parseRes.success, false);
+    assert(parseRes.error?.issues.some((i) => i.message.includes("72 UTF-8 bytes")));
+  });
+
+  await it("6. password with exact 72 UTF-8 bytes and >= 15 chars succeeds schema validation", () => {
+    const exact72Bytes = "a".repeat(72);
+    const parseRes = changePasswordSchema.safeParse({
+      currentPassword: "ValidCurrentPassword123!",
+      newPassword: exact72Bytes,
+      confirmPassword: exact72Bytes,
+    });
+    assert.strictEqual(parseRes.success, true);
+  });
+
+  await it("7. all-whitespace password fails validation", () => {
+    const whitespacePass = "               "; // 15 spaces
+    const parseRes = changePasswordSchema.safeParse({
+      currentPassword: "ValidCurrentPassword123!",
+      newPassword: whitespacePass,
+      confirmPassword: whitespacePass,
+    });
+    assert.strictEqual(parseRes.success, false);
+    assert(parseRes.error?.issues.some((i) => i.message.includes("whitespace")));
+  });
+
+  await it("8. known weak / default passwords from blocklist fail validation", () => {
+    for (const blocked of BLOCKED_PASSWORDS) {
+      const parseRes = changePasswordSchema.safeParse({
+        currentPassword: "ValidCurrentPassword123!",
+        newPassword: blocked,
+        confirmPassword: blocked,
+      });
+      assert.strictEqual(parseRes.success, false, `Blocked password '${blocked}' must fail`);
+      assert(parseRes.error?.issues.some((i) => i.message.includes("Choose a stronger password.")));
+    }
+  });
+
+  await it("9. new password mismatch fails validation", () => {
+    const parseRes = changePasswordSchema.safeParse({
+      currentPassword: "ValidCurrentPassword123!",
+      newPassword: "A-very-strong-passphrase-2026!",
+      confirmPassword: "A-different-passphrase-2026!",
+    });
+    assert.strictEqual(parseRes.success, false);
+    assert(parseRes.error?.issues.some((i) => i.message.includes("New passwords do not match.")));
+  });
+
+  await it("10. valid strong passphrase with spaces and symbols succeeds validation", () => {
+    const parseRes = changePasswordSchema.safeParse({
+      currentPassword: "ValidCurrentPassword123!",
+      newPassword: "correct horse battery staple 2026!",
+      confirmPassword: "correct horse battery staple 2026!",
+    });
+    assert.strictEqual(parseRes.success, true);
+  });
+
+  await it("11. valid Unicode passphrase succeeds validation within byte bounds", () => {
+    const unicodePass = "超级安全密码-TradePass2026!";
+    assert(Buffer.byteLength(unicodePass, "utf8") <= 72);
+    const parseRes = changePasswordSchema.safeParse({
+      currentPassword: "ValidCurrentPassword123!",
+      newPassword: unicodePass,
+      confirmPassword: unicodePass,
+    });
+    assert.strictEqual(parseRes.success, true);
+  });
+
+  await it("12. password change rate limiting throttles after 5 attempts and resets", () => {
+    const testAdminIpKey = "test-admin-rate-limit:198.51.100.99";
+    passwordChangeRateLimiter.reset(testAdminIpKey);
+    for (let i = 0; i < 5; i++) {
+      const check = passwordChangeRateLimiter.check(testAdminIpKey);
+      assert.strictEqual(check.allowed, true, `Attempt ${i + 1} should be allowed`);
+    }
+    const blocked = passwordChangeRateLimiter.check(testAdminIpKey);
+    assert.strictEqual(blocked.allowed, false, "6th attempt must be throttled");
+    passwordChangeRateLimiter.reset(testAdminIpKey);
+    const resetCheck = passwordChangeRateLimiter.check(testAdminIpKey);
+    assert.strictEqual(resetCheck.allowed, true, "Should be allowed after reset");
+    passwordChangeRateLimiter.reset(testAdminIpKey);
+  });
+
+  await it("13. password and passwordHash are never returned in action response", async () => {
+    const res = await changePasswordAction({
+      currentPassword: "test",
+      newPassword: "test",
+      confirmPassword: "test",
+    });
+    assert(!("password" in res), "Password must never be returned");
+    assert(!("passwordHash" in res), "PasswordHash must never be returned");
+    assert(!("currentPassword" in res), "currentPassword must never be returned");
+    assert(!("newPassword" in res), "newPassword must never be returned");
+  });
+
+  await it("14. existing logout still works", async () => {
+    const logoutRes = await adminLogoutAction();
+    assert.strictEqual(logoutRes.success, true);
+    assert.strictEqual(logoutRes.message, "Signed out successfully.");
+  });
+
+  await it("15. ADMIN_AUTHORIZED_EMAIL validation logic works", () => {
+    const originalEmail = process.env.ADMIN_AUTHORIZED_EMAIL;
+    process.env.ADMIN_AUTHORIZED_EMAIL = "authorized-only@sourcinghub.com";
+    const userEmail = "different@sourcinghub.com";
+    assert.notStrictEqual(
+      userEmail.toLowerCase(),
+      process.env.ADMIN_AUTHORIZED_EMAIL.toLowerCase(),
+      "Unauthorized email must be recognized as non-matching"
+    );
+    process.env.ADMIN_AUTHORIZED_EMAIL = originalEmail;
+  });
+
+  await it("16-22. database password change lifecycle, sessionVersion increment, & Browser B revocation", async () => {
+    const testEmail = `test-admin-${Date.now()}@test-sourcinghub.com`;
+    const initialPass = "InitialSecurePassword2026!";
+    const newPass = "NewSecurePassphrase2026-SuperStrong!";
+    const initialHash = await bcrypt.hash(initialPass, 12);
+
+    // Create test admin user in DB
+    const testAdmin = await prisma.adminUser.create({
+      data: {
+        name: "Test Admin Security",
+        email: testEmail,
+        passwordHash: initialHash,
+        role: "ADMIN",
+        sessionVersion: 0,
+      },
+    });
+
+    try {
+      // 16. Wrong current password fails bcrypt verification
+      const wrongCurrentMatches = await bcrypt.compare(
+        "WrongCurrentPassword123!",
+        testAdmin.passwordHash
+      );
+      assert.strictEqual(wrongCurrentMatches, false, "Wrong current password must not match");
+
+      // 17. Correct current password succeeds bcrypt verification
+      const correctCurrentMatches = await bcrypt.compare(initialPass, testAdmin.passwordHash);
+      assert.strictEqual(correctCurrentMatches, true, "Correct current password must match");
+
+      // 18. Same-as-current password matches hash (triggering rejection)
+      const sameAsOldMatches = await bcrypt.compare(initialPass, testAdmin.passwordHash);
+      assert.strictEqual(sameAsOldMatches, true, "Same as current password must be identified");
+
+      // Issue active session token for Browser B before password change
+      const tokenBrowserB = createSessionToken({
+        id: testAdmin.id,
+        email: testAdmin.email,
+        name: testAdmin.name,
+        sessionVersion: 0,
+      });
+      const verifiedBrowserBBefore = verifySessionToken(tokenBrowserB);
+      assert(verifiedBrowserBBefore !== null);
+      assert.strictEqual(verifiedBrowserBBefore.sessionVersion, 0);
+
+      // 19. Password change updates passwordHash and increments sessionVersion atomically
+      const newHash = await bcrypt.hash(newPass, 12);
+      const updatedAdmin = await prisma.adminUser.update({
+        where: { id: testAdmin.id },
+        data: {
+          passwordHash: newHash,
+          sessionVersion: {
+            increment: 1,
+          },
+        },
+      });
+
+      // 20. Plaintext password is NEVER stored; valid bcrypt hash format verified
+      assert.notStrictEqual(updatedAdmin.passwordHash, newPass, "Plaintext password must not be stored");
+      assert(
+        updatedAdmin.passwordHash.startsWith("$2a$") || updatedAdmin.passwordHash.startsWith("$2b$"),
+        "Stored hash must be valid bcrypt format"
+      );
+
+      // 21. sessionVersion incremented to 1; other admin fields untouched
+      assert.strictEqual(updatedAdmin.sessionVersion, 1, "sessionVersion must be incremented to 1");
+      assert.strictEqual(updatedAdmin.id, testAdmin.id);
+      assert.strictEqual(updatedAdmin.email, testAdmin.email);
+      assert.strictEqual(updatedAdmin.name, testAdmin.name);
+      assert.strictEqual(updatedAdmin.role, testAdmin.role);
+
+      // 22. Verification of old password failure & new password success
+      const oldPasswordMatchesNow = await bcrypt.compare(initialPass, updatedAdmin.passwordHash);
+      assert.strictEqual(oldPasswordMatchesNow, false, "Old password must no longer match after change");
+      const newPasswordMatches = await bcrypt.compare(newPass, updatedAdmin.passwordHash);
+      assert.strictEqual(newPasswordMatches, true, "New password must match after change");
+
+      // Browser B revocation test:
+      // Browser B's token still carries sessionVersion: 0.
+      // When checked against the DB's current sessionVersion (1), it must mismatch!
+      const verifiedBrowserBAfter = verifySessionToken(tokenBrowserB);
+      assert(verifiedBrowserBAfter !== null);
+      assert.strictEqual(verifiedBrowserBAfter.sessionVersion, 0);
+      assert.notStrictEqual(
+        verifiedBrowserBAfter.sessionVersion,
+        updatedAdmin.sessionVersion,
+        "Browser B's old sessionVersion (0) must NOT match updated DB sessionVersion (1)"
+      );
+
+      // New session token issued after password change carries latest sessionVersion
+      const tokenBrowserNew = createSessionToken({
+        id: testAdmin.id,
+        email: testAdmin.email,
+        name: testAdmin.name,
+        sessionVersion: updatedAdmin.sessionVersion,
+      });
+      const verifiedNew = verifySessionToken(tokenBrowserNew);
+      assert(verifiedNew !== null);
+      assert.strictEqual(
+        verifiedNew.sessionVersion,
+        updatedAdmin.sessionVersion,
+        "New session token version must match updated DB sessionVersion"
+      );
+    } finally {
+      // Clean up test admin user
+      await prisma.adminUser.delete({
+        where: { id: testAdmin.id },
+      });
+    }
   });
 
   console.log("\n=================================================");

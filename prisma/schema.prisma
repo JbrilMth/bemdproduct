@@ -173,9 +173,10 @@ model AdminUser {
   id           String   @id @default(cuid())
   name         String
   email        String   @unique
-  passwordHash String
-  role         String   @default("ADMIN")
-  createdAt    DateTime @default(now())
+  passwordHash   String
+  role           String   @default("ADMIN")
+  sessionVersion Int      @default(0)
+  createdAt      DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   @@index([email])

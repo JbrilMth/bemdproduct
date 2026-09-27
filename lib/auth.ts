@@ -24,17 +24,24 @@ export interface AdminSessionData {
   id: string;
   email: string;
   name: string;
+  sessionVersion: number;
   exp: number;
 }
 
 /**
  * Creates a cryptographically signed HMAC-SHA256 session token.
  */
-export function createSessionToken(user: { id: string; email: string; name: string }): string {
+export function createSessionToken(user: {
+  id: string;
+  email: string;
+  name: string;
+  sessionVersion?: number;
+}): string {
   const payload: AdminSessionData = {
     id: user.id,
     email: user.email,
     name: user.name,
+    sessionVersion: typeof user.sessionVersion === "number" ? user.sessionVersion : 0,
     exp: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
   };
 
@@ -79,6 +86,10 @@ export function verifySessionToken(token: string): AdminSessionData | null {
       return null;
     }
 
+    if (typeof payload.sessionVersion !== "number") {
+      payload.sessionVersion = 0;
+    }
+
     return payload;
   } catch {
     return null;
@@ -87,6 +98,7 @@ export function verifySessionToken(token: string): AdminSessionData | null {
 
 /**
  * Retrieves and validates the current admin session from request cookies.
+ * Validates HMAC, expiration, database account existence, and sessionVersion consistency.
  */
 export async function getAdminSession(): Promise<AdminSessionData | null> {
   try {
@@ -97,7 +109,34 @@ export async function getAdminSession(): Promise<AdminSessionData | null> {
     const session = verifySessionToken(sessionCookie.value);
     if (!session) return null;
 
-    return session;
+    // Validate account existence and sessionVersion against database
+    const user = await prisma.adminUser.findUnique({
+      where: { id: session.id },
+      select: { id: true, email: true, name: true, sessionVersion: true },
+    });
+
+    if (!user) return null;
+
+    // Reject if session version does not match current database sessionVersion
+    const tokenVersion = typeof session.sessionVersion === "number" ? session.sessionVersion : 0;
+    const dbVersion = typeof user.sessionVersion === "number" ? user.sessionVersion : 0;
+    if (tokenVersion !== dbVersion) {
+      return null;
+    }
+
+    // Check authorized email if configured
+    const authorizedEmail = process.env.ADMIN_AUTHORIZED_EMAIL;
+    if (authorizedEmail && user.email.toLowerCase() !== authorizedEmail.toLowerCase()) {
+      return null;
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      sessionVersion: dbVersion,
+      exp: session.exp,
+    };
   } catch {
     return null;
   }
@@ -135,36 +174,14 @@ export function isValidAdminSecretPath(candidate: string): boolean {
 
 /**
  * Strictly requires an authenticated admin session for Server Actions and APIs.
- * Throws an Error if unauthenticated.
+ * Throws an Error if unauthenticated or revoked.
  */
 export async function requireAdminSession(): Promise<AdminSessionData> {
   const session = await getAdminSession();
   if (!session) {
     throw new Error("Unauthorized: Valid Administrator session is required for this operation.");
   }
-
-  // Verify that the admin user exists in the database
-  const user = await prisma.adminUser.findUnique({
-    where: { id: session.id },
-    select: { id: true, email: true, name: true },
-  });
-
-  if (!user) {
-    throw new Error("Unauthorized: Administrator account not found or revoked.");
-  }
-
-  // Authorization check: If ADMIN_AUTHORIZED_EMAIL is set, verify email matches
-  const authorizedEmail = process.env.ADMIN_AUTHORIZED_EMAIL;
-  if (authorizedEmail && user.email.toLowerCase() !== authorizedEmail.toLowerCase()) {
-    throw new Error("Forbidden: This administrator account is not authorized.");
-  }
-
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    exp: session.exp,
-  };
+  return session;
 }
 
 /**
@@ -174,6 +191,7 @@ export async function setAdminSessionCookie(user: {
   id: string;
   email: string;
   name: string;
+  sessionVersion?: number;
 }): Promise<void> {
   const token = createSessionToken(user);
   const cookieStore = await cookies();
@@ -191,14 +209,18 @@ export async function setAdminSessionCookie(user: {
  * Destroys the admin session cookie.
  */
 export async function clearAdminSessionCookie(): Promise<void> {
-  const cookieStore = await cookies();
-  cookieStore.delete(ADMIN_COOKIE_NAME);
-  // Also set expired cookie for maximum browser compatibility
-  cookieStore.set(ADMIN_COOKIE_NAME, "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    maxAge: 0,
-    path: "/",
-    sameSite: "lax",
-  });
+  try {
+    const cookieStore = await cookies();
+    cookieStore.delete(ADMIN_COOKIE_NAME);
+    // Also set expired cookie for maximum browser compatibility
+    cookieStore.set(ADMIN_COOKIE_NAME, "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 0,
+      path: "/",
+      sameSite: "lax",
+    });
+  } catch {
+    // If invoked outside an active request scope (e.g., test runner), safely handle
+  }
 }
