@@ -107,7 +107,7 @@ export default function AdminLoginPage() {
         <div className="border border-neutral-100 bg-neutral-50 p-3 text-center">
           <div className="flex items-center justify-center gap-1.5 text-xs text-neutral-500">
             <ShieldCheck className="h-4 w-4 text-neutral-700" />
-            <span>Default Super Admin: <strong className="text-neutral-700">admin@sourcinghub.com</strong></span>
+            <span>Authorized corporate personnel only. All access attempts are monitored.</span>
           </div>
         </div>
       </div>

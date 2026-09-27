@@ -9,8 +9,14 @@ import {
   checkFileExistsInR2,
   testR2Connection,
   generateR2StorageKey,
+  validateImageBuffer,
+  validateImageDimensions,
+  getImageDimensions,
   ALLOWED_IMAGE_TYPES,
   MAX_IMAGE_SIZE_BYTES,
+  MAX_IMAGE_WIDTH,
+  MAX_IMAGE_HEIGHT,
+  MAX_IMAGE_PIXELS,
 } from "./storage/r2";
 
 export {
@@ -22,8 +28,14 @@ export {
   checkFileExistsInR2,
   testR2Connection,
   generateR2StorageKey,
+  validateImageBuffer,
+  validateImageDimensions,
+  getImageDimensions,
   ALLOWED_IMAGE_TYPES,
   MAX_IMAGE_SIZE_BYTES,
+  MAX_IMAGE_WIDTH,
+  MAX_IMAGE_HEIGHT,
+  MAX_IMAGE_PIXELS,
 };
 
 export interface UploadResult {
@@ -36,7 +48,7 @@ export interface UploadResult {
 
 /**
  * Uploads an image buffer to Cloudflare R2 (or local storage fallback).
- * Uses structured unique keys:
+ * Performs magic-byte inspection and dimension verification before storage and uses structured unique keys:
  * - products/{scopeId}/{uniqueId}.{ext}
  * - categories/{scopeId}/{uniqueId}.{ext}
  * - requests/{scopeId}/{uniqueId}.{ext}
@@ -48,25 +60,36 @@ export async function uploadToStorage(
   folder: "products" | "categories" | "sourcing" | "requests" | "general" = "products",
   scopeId?: string | null
 ): Promise<UploadResult> {
+  // Validate magic bytes against MIME type before saving anywhere
+  const validation = validateImageBuffer(buffer, mimeType);
+  if (!validation.valid) {
+    throw new Error(validation.error || "Invalid file content format.");
+  }
+  const effectiveMime = validation.detectedMime || mimeType;
+
+  // Validate image dimensions without decoding pixel memory
+  const dimensionCheck = validateImageDimensions(buffer);
+  if (!dimensionCheck.valid) {
+    throw new Error(dimensionCheck.error || "Invalid image dimensions.");
+  }
+
   // Normalize folder naming
   const mappedFolder =
     folder === "sourcing" ? "requests" : (folder as "products" | "categories" | "requests" | "general");
 
-  const storageKey = generateR2StorageKey(mappedFolder, scopeId, originalFilename, mimeType);
+  const storageKey = generateR2StorageKey(mappedFolder, scopeId, originalFilename, effectiveMime);
 
   if (isR2Configured()) {
     // Cloudflare R2 Upload
     await uploadFileToR2({
       buffer,
       key: storageKey,
-      contentType: mimeType,
+      contentType: effectiveMime,
       metadata: {
-        originalFilename: encodeURIComponent(originalFilename),
+        originalFilename: encodeURIComponent(originalFilename.slice(0, 100)),
       },
     });
 
-    // In current step, R2 bucket is private. We store the storageKey.
-    // For preview/reference, format URL with public URL if configured or key path
     const publicBase = process.env.R2_PUBLIC_URL?.replace(/\/$/, "");
     const url = publicBase ? `${publicBase}/${storageKey}` : `/api/media/${storageKey}`;
 
@@ -74,15 +97,20 @@ export async function uploadToStorage(
       url,
       storageKey,
       filename: originalFilename,
-      mimeType,
+      mimeType: effectiveMime,
       size: buffer.length,
     };
   } else {
     // Local Filesystem Fallback (for offline local development)
-    const localRelativePath = `uploads/${storageKey}`;
-    const localFilePath = path.join(process.cwd(), "public", localRelativePath);
-    const localDir = path.dirname(localFilePath);
+    const baseUploadsDir = path.resolve(process.cwd(), "public", "uploads");
+    const localFilePath = path.resolve(baseUploadsDir, storageKey);
 
+    // Strict path traversal containment check
+    if (!localFilePath.startsWith(baseUploadsDir)) {
+      throw new Error("Security Error: Path traversal detected in storage path.");
+    }
+
+    const localDir = path.dirname(localFilePath);
     if (!fs.existsSync(localDir)) {
       fs.mkdirSync(localDir, { recursive: true });
     }
@@ -90,10 +118,10 @@ export async function uploadToStorage(
     fs.writeFileSync(localFilePath, buffer);
 
     return {
-      url: `/${localRelativePath}`,
+      url: `/uploads/${storageKey}`,
       storageKey,
       filename: originalFilename,
-      mimeType,
+      mimeType: effectiveMime,
       size: buffer.length,
     };
   }

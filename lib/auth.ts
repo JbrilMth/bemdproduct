@@ -2,12 +2,23 @@ import { cookies } from "next/headers";
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 
+import {
+  validateSessionSecret,
+  validateAdminSecretPath,
+} from "@/lib/security/config";
+
 export const ADMIN_COOKIE_NAME = "csh_admin_session";
 
-const SESSION_SECRET =
-  process.env.AUTH_SECRET ||
-  process.env.SESSION_SECRET ||
-  "csh_secure_admin_secret_key_2026_b2b_trade_production";
+/**
+ * Retrieves the cryptographic session signing secret.
+ * Enforces production fail-closed behavior via centralized security validation.
+ */
+export function getSessionSecret(): string {
+  return validateSessionSecret(
+    process.env.AUTH_SECRET || process.env.SESSION_SECRET,
+    process.env.NODE_ENV === "production"
+  );
+}
 
 export interface AdminSessionData {
   id: string;
@@ -29,8 +40,9 @@ export function createSessionToken(user: { id: string; email: string; name: stri
 
   const payloadString = JSON.stringify(payload);
   const payloadB64 = Buffer.from(payloadString, "utf8").toString("base64url");
+  const secret = getSessionSecret();
   const signature = crypto
-    .createHmac("sha256", SESSION_SECRET)
+    .createHmac("sha256", secret)
     .update(payloadB64)
     .digest("base64url");
 
@@ -47,8 +59,9 @@ export function verifySessionToken(token: string): AdminSessionData | null {
     if (parts.length !== 2) return null;
 
     const [payloadB64, signature] = parts;
+    const secret = getSessionSecret();
     const expectedSignature = crypto
-      .createHmac("sha256", SESSION_SECRET)
+      .createHmac("sha256", secret)
       .update(payloadB64)
       .digest("base64url");
 
@@ -95,14 +108,10 @@ export async function getAdminSession(): Promise<AdminSessionData | null> {
  * Never exposed to client-side code.
  */
 export function getAdminSecretPath(): string {
-  const secretPath = process.env.ADMIN_SECRET_PATH;
-  if (!secretPath) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("Security Error: ADMIN_SECRET_PATH is not configured in environment variables.");
-    }
-    return "adm-9f82c417b03e";
-  }
-  return secretPath.replace(/^\/+|\/+$/g, "");
+  return validateAdminSecretPath(
+    process.env.ADMIN_SECRET_PATH,
+    process.env.NODE_ENV === "production"
+  );
 }
 
 /**

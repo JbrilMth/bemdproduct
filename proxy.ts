@@ -1,14 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  validateSessionSecret,
+  validateAdminSecretPath,
+} from "@/lib/security/config";
+
 const ADMIN_COOKIE_NAME = "csh_admin_session";
-const SESSION_SECRET =
-  process.env.AUTH_SECRET ||
-  process.env.SESSION_SECRET ||
-  "csh_secure_admin_secret_key_2026_b2b_trade_production";
+
+function getSessionSecret(): string {
+  return validateSessionSecret(
+    process.env.AUTH_SECRET || process.env.SESSION_SECRET,
+    process.env.NODE_ENV === "production"
+  );
+}
 
 function getSecretPrefix(): string {
-  const raw = process.env.ADMIN_SECRET_PATH || "adm-9f82c417b03e";
-  return `/${raw.replace(/^\/+|\/+$/g, "")}`;
+  const validated = validateAdminSecretPath(
+    process.env.ADMIN_SECRET_PATH,
+    process.env.NODE_ENV === "production"
+  );
+  return `/${validated}`;
 }
 
 /**
@@ -33,7 +44,8 @@ async function verifyToken(token: string): Promise<boolean> {
 
     // Import secret key for HMAC
     const encoder = new TextEncoder();
-    const keyData = encoder.encode(SESSION_SECRET);
+    const sessionSecret = getSessionSecret();
+    const keyData = encoder.encode(sessionSecret);
     const key = await crypto.subtle.importKey(
       "raw",
       keyData,

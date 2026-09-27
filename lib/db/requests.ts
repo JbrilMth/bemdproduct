@@ -79,16 +79,20 @@ export async function getAllRequests(filters?: {
 }> {
   const { type, status, search, page = 1, pageSize = 20 } = filters || {};
 
+  const safePage = Math.max(1, Math.min(Number(page) || 1, 1000));
+  const safePageSize = Math.max(1, Math.min(Number(pageSize) || 20, 100));
+  const safeSearch = search ? search.trim().slice(0, 100) : "";
+
   const where: any = {};
   if (type) where.type = type;
   if (status) where.status = status;
-  if (search) {
+  if (safeSearch !== "") {
     where.OR = [
-      { customerName: { contains: search, mode: "insensitive" } },
-      { companyName: { contains: search, mode: "insensitive" } },
-      { email: { contains: search, mode: "insensitive" } },
-      { productName: { contains: search, mode: "insensitive" } },
-      { message: { contains: search, mode: "insensitive" } },
+      { customerName: { contains: safeSearch, mode: "insensitive" } },
+      { companyName: { contains: safeSearch, mode: "insensitive" } },
+      { email: { contains: safeSearch, mode: "insensitive" } },
+      { productName: { contains: safeSearch, mode: "insensitive" } },
+      { message: { contains: safeSearch, mode: "insensitive" } },
     ];
   }
 
@@ -107,8 +111,8 @@ export async function getAllRequests(filters?: {
         images: true,
       },
       orderBy: { createdAt: "desc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      skip: (safePage - 1) * safePageSize,
+      take: safePageSize,
     }),
     prisma.customerRequest.count({ where }),
   ]);
@@ -116,7 +120,7 @@ export async function getAllRequests(filters?: {
   return {
     requests: requests as CustomerRequestWithDetails[],
     total,
-    totalPages: Math.ceil(total / pageSize),
+    totalPages: Math.ceil(total / safePageSize),
   };
 }
 

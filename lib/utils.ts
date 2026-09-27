@@ -81,19 +81,36 @@ export function getCategoryStatusBadgeClass(status: CategoryStatus | string): st
 }
 
 /**
- * Resolves a stored image URL or storage key to an accessible URL.
+ * Resolves a stored image URL or storage key to an accessible, sanitized URL.
  * Routes R2 storage keys to /api/media/... unless a full CDN URL is provided.
+ * Strictly blocks malicious pseudo-protocols like javascript: or vbscript:.
  */
 export function resolveImageUrl(url?: string | null): string {
-  if (!url) return "";
-  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) {
-    return url;
-  }
-  if (url.startsWith("/api/media/") || url.startsWith("/uploads/") || url.startsWith("/images/")) {
-    return url;
+  if (!url || typeof url !== "string") return "";
+
+  const trimmed = url.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Defend against XSS vectors in image sources
+  if (
+    lower.startsWith("javascript:") ||
+    lower.startsWith("vbscript:") ||
+    lower.startsWith("data:text/html") ||
+    lower.startsWith("data:application") ||
+    lower.includes("<script")
+  ) {
+    return "";
   }
 
-  const cleanKey = url.replace(/^\/+/, "");
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("data:image/")) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("/api/media/") || trimmed.startsWith("/uploads/") || trimmed.startsWith("/images/")) {
+    return trimmed;
+  }
+
+  const cleanKey = trimmed.replace(/^\/+/, "");
   if (
     cleanKey.startsWith("categories/") ||
     cleanKey.startsWith("products/") ||
@@ -103,6 +120,6 @@ export function resolveImageUrl(url?: string | null): string {
     return `/api/media/${cleanKey}`;
   }
 
-  return url.startsWith("/") ? url : `/${url}`;
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 

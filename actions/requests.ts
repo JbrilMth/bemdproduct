@@ -11,9 +11,11 @@ import {
   quotationRequestSchema,
   sourcingRequestSchema,
   updateRequestStatusSchema,
+  updateRequestInternalNotesSchema,
 } from "@/lib/validations";
 import { RequestStatus } from "@prisma/client";
 import { requireAdminSession, getAdminSecretPath } from "@/lib/auth";
+import { publicRequestRateLimiter, getClientIp } from "@/lib/rate-limit";
 
 export type ActionResult<T = any> = {
   success: boolean;
@@ -26,11 +28,21 @@ export async function submitQuotationRequestAction(
   formData: unknown
 ): Promise<ActionResult> {
   try {
+    // 1. IP Rate Limiting (8 submissions / min)
+    const clientIp = await getClientIp();
+    const rateCheck = publicRequestRateLimiter.check(clientIp);
+    if (!rateCheck.allowed) {
+      return {
+        success: false,
+        message: `Too many submissions from your connection. Please wait ${rateCheck.resetInSeconds} seconds before submitting again.`,
+      };
+    }
+
+    // 2. Strict Input Validation
     const validated = quotationRequestSchema.safeParse(formData);
     if (!validated.success) {
       const fieldErrors = validated.error.flatten().fieldErrors;
       const firstError = Object.values(fieldErrors).flat()[0] || "Please fill all required fields correctly.";
-      console.warn("Quotation request validation failed:", fieldErrors);
       return {
         success: false,
         message: firstError,
@@ -52,7 +64,7 @@ export async function submitQuotationRequestAction(
     console.error("Error submitting quotation request:", error);
     return {
       success: false,
-      message: error.message || "Failed to submit quotation request. Please try again.",
+      message: "Failed to submit quotation request. Please check your connection and try again.",
     };
   }
 }
@@ -61,11 +73,21 @@ export async function submitSourcingRequestAction(
   formData: unknown
 ): Promise<ActionResult> {
   try {
+    // 1. IP Rate Limiting (8 submissions / min)
+    const clientIp = await getClientIp();
+    const rateCheck = publicRequestRateLimiter.check(clientIp);
+    if (!rateCheck.allowed) {
+      return {
+        success: false,
+        message: `Too many submissions from your connection. Please wait ${rateCheck.resetInSeconds} seconds before submitting again.`,
+      };
+    }
+
+    // 2. Strict Input Validation
     const validated = sourcingRequestSchema.safeParse(formData);
     if (!validated.success) {
       const fieldErrors = validated.error.flatten().fieldErrors;
       const firstError = Object.values(fieldErrors).flat()[0] || "Please fill all required fields correctly.";
-      console.warn("Sourcing request validation failed:", fieldErrors);
       return {
         success: false,
         message: firstError,
@@ -87,7 +109,7 @@ export async function submitSourcingRequestAction(
     console.error("Error submitting sourcing request:", error);
     return {
       success: false,
-      message: error.message || "Failed to submit sourcing request. Please try again.",
+      message: "Failed to submit sourcing request. Please check your connection and try again.",
     };
   }
 }
@@ -99,6 +121,10 @@ export async function updateRequestStatusAction(
   try {
     await requireAdminSession();
     const adminPath = `/${getAdminSecretPath()}`;
+
+    if (!requestId || typeof requestId !== "string" || requestId.length > 100) {
+      return { success: false, message: "Invalid request ID provided." };
+    }
 
     const validated = updateRequestStatusSchema.safeParse({ status });
     if (!validated.success) {
@@ -135,7 +161,23 @@ export async function updateRequestInternalNotesAction(
     await requireAdminSession();
     const adminPath = `/${getAdminSecretPath()}`;
 
-    const updated = await updateRequestInternalNotes(requestId, internalNotes);
+    const validated = updateRequestInternalNotesSchema.safeParse({
+      requestId,
+      internalNotes: internalNotes || "",
+    });
+
+    if (!validated.success) {
+      const firstError = Object.values(validated.error.flatten().fieldErrors).flat()[0];
+      return {
+        success: false,
+        message: firstError || "Invalid notes payload.",
+      };
+    }
+
+    const updated = await updateRequestInternalNotes(
+      validated.data.requestId,
+      validated.data.internalNotes
+    );
     revalidatePath(`${adminPath}/requests/${requestId}`);
 
     return {

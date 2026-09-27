@@ -23,16 +23,21 @@ export async function getProducts(params: ProductFilterParams): Promise<{
     pageSize = 12,
   } = params;
 
+  // Strict sanitization and resource bounds
+  const safePage = Math.max(1, Math.min(Number(page) || 1, 1000));
+  const safePageSize = Math.max(1, Math.min(Number(pageSize) || 12, 60));
+  const safeSearch = search ? search.trim().slice(0, 100) : "";
+
   const where: any = {
     status: ProductStatus.PUBLISHED,
   };
 
-  // Search filter
-  if (search && search.trim() !== "") {
+  // Search filter with bounded length
+  if (safeSearch !== "") {
     where.OR = [
-      { name: { contains: search, mode: "insensitive" } },
-      { shortDescription: { contains: search, mode: "insensitive" } },
-      { description: { contains: search, mode: "insensitive" } },
+      { name: { contains: safeSearch, mode: "insensitive" } },
+      { shortDescription: { contains: safeSearch, mode: "insensitive" } },
+      { description: { contains: safeSearch, mode: "insensitive" } },
     ];
   }
 
@@ -62,7 +67,7 @@ export async function getProducts(params: ProductFilterParams): Promise<{
   if (isNew !== undefined) where.isNew = isNew;
   if (isTrending !== undefined) where.isTrending = isTrending;
 
-  const skip = (page - 1) * pageSize;
+  const skip = (safePage - 1) * safePageSize;
 
   const [products, total] = await Promise.all([
     prisma.product.findMany({
@@ -86,7 +91,7 @@ export async function getProducts(params: ProductFilterParams): Promise<{
         },
       },
       skip,
-      take: pageSize,
+      take: safePageSize,
       orderBy: { createdAt: "desc" },
     }),
     prisma.product.count({ where }),
@@ -95,8 +100,8 @@ export async function getProducts(params: ProductFilterParams): Promise<{
   return {
     products: products as ProductWithDetails[],
     total,
-    totalPages: Math.ceil(total / pageSize),
-    currentPage: page,
+    totalPages: Math.ceil(total / safePageSize),
+    currentPage: safePage,
   };
 }
 
@@ -125,12 +130,16 @@ export async function getAllProductsForAdmin(params?: {
     pageSize = 20,
   } = params || {};
 
+  const safePage = Math.max(1, Math.min(Number(page) || 1, 1000));
+  const safePageSize = Math.max(1, Math.min(Number(pageSize) || 20, 100));
+  const safeSearch = search ? search.trim().slice(0, 100) : "";
+
   const where: any = {};
 
-  if (search && search.trim() !== "") {
+  if (safeSearch !== "") {
     where.OR = [
-      { name: { contains: search, mode: "insensitive" } },
-      { shortDescription: { contains: search, mode: "insensitive" } },
+      { name: { contains: safeSearch, mode: "insensitive" } },
+      { shortDescription: { contains: safeSearch, mode: "insensitive" } },
     ];
   }
 
@@ -167,8 +176,8 @@ export async function getAllProductsForAdmin(params?: {
           },
         },
       },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      skip: (safePage - 1) * safePageSize,
+      take: safePageSize,
       orderBy: { updatedAt: "desc" },
     }),
     prisma.product.count({ where }),
@@ -177,7 +186,7 @@ export async function getAllProductsForAdmin(params?: {
   return {
     products: products as ProductWithDetails[],
     total,
-    totalPages: Math.ceil(total / pageSize),
+    totalPages: Math.ceil(total / safePageSize),
   };
 }
 

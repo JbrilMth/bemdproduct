@@ -75,18 +75,293 @@ export function getR2Client(): { client: S3Client; bucketName: string } {
 }
 
 /**
- * Allowed image MIME types and safe extension mapping
+ * Allowed image MIME types and safe extension mapping.
+ * Note: SVG (image/svg+xml) is intentionally excluded to prevent Stored XSS vectors.
  */
 export const ALLOWED_IMAGE_TYPES: Record<string, string> = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
-  "image/svg+xml": ".svg",
-  "image/avif": ".avif",
 };
 
 export const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+export const MAX_IMAGE_WIDTH = 10000;
+export const MAX_IMAGE_HEIGHT = 10000;
+export const MAX_IMAGE_PIXELS = 40_000_000; // 40 million pixels
+
+/**
+ * Validates a file buffer against binary magic bytes to prevent MIME spoofing.
+ * Rejects polyglot payloads, HTML/scripts disguised as images, and executables.
+ */
+export function validateImageBuffer(
+  buffer: Buffer,
+  claimedMimeType?: string
+): { valid: boolean; detectedMime: string | null; error?: string } {
+  if (!buffer || buffer.length < 12) {
+    return { valid: false, detectedMime: null, error: "File buffer is too small to be a valid image." };
+  }
+
+  // Detect binary signatures
+  let detectedMime: string | null = null;
+
+  // 1. JPEG: FF D8 FF
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    detectedMime = "image/jpeg";
+  }
+  // 2. PNG: 89 50 4E 47 0D 0A 1A 0A
+  else if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    detectedMime = "image/png";
+  }
+  // 3. WebP: RIFF....WEBP
+  else if (
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP"
+  ) {
+    detectedMime = "image/webp";
+  }
+  // 4. GIF: GIF87a or GIF89a
+  else if (
+    buffer.toString("ascii", 0, 6) === "GIF87a" ||
+    buffer.toString("ascii", 0, 6) === "GIF89a"
+  ) {
+    detectedMime = "image/gif";
+  }
+
+  // Explicitly reject AVIF magic bytes (ftypavif, ftypavis, ftypmif1, etc.)
+  const isAvifMagic =
+    buffer.length >= 12 &&
+    buffer.toString("ascii", 4, 8) === "ftyp" &&
+    (buffer.toString("ascii", 8, 12) === "avif" ||
+      buffer.toString("ascii", 8, 12) === "avis" ||
+      buffer.toString("ascii", 8, 12) === "mif1");
+
+  if (isAvifMagic || claimedMimeType?.toLowerCase().trim() === "image/avif") {
+    return {
+      valid: false,
+      detectedMime: null,
+      error: "AVIF image format is not permitted for upload. Allowed formats: JPEG, PNG, WebP, GIF.",
+    };
+  }
+
+  // Block malicious content signatures
+  const headerPreview = buffer.toString("utf8", 0, Math.min(buffer.length, 512)).toLowerCase();
+  if (
+    headerPreview.includes("<html") ||
+    headerPreview.includes("<!doctype") ||
+    headerPreview.includes("<script") ||
+    headerPreview.includes("<?php") ||
+    headerPreview.includes("<svg") ||
+    (buffer[0] === 0x4d && buffer[1] === 0x5a) // Windows MZ executable
+  ) {
+    return {
+      valid: false,
+      detectedMime: null,
+      error: "File contains suspicious or executable header signatures and has been rejected.",
+    };
+  }
+
+  if (!detectedMime) {
+    return {
+      valid: false,
+      detectedMime: null,
+      error: "File content does not match any allowed image format (JPEG, PNG, WebP, GIF).",
+    };
+  }
+
+  // If a claimed MIME type was specified, verify compatibility
+  if (claimedMimeType) {
+    const normalizedClaimed = claimedMimeType.toLowerCase().trim();
+    // Allow minor aliases (e.g. image/jpg vs image/jpeg)
+    const isJpegMatch =
+      detectedMime === "image/jpeg" &&
+      (normalizedClaimed === "image/jpeg" || normalizedClaimed === "image/jpg");
+
+    if (detectedMime !== normalizedClaimed && !isJpegMatch) {
+      return {
+        valid: false,
+        detectedMime,
+        error: `MIME type spoofing detected: file content is "${detectedMime}" but claimed "${claimedMimeType}".`,
+      };
+    }
+  }
+
+  return { valid: true, detectedMime };
+}
+
+export interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+/**
+ * Extracts image dimensions directly from binary headers without decoding pixel buffers.
+ * Bounds memory usage to sub-millisecond header inspection (prevents decompression bombs).
+ */
+export function getImageDimensions(
+  buffer: Buffer
+): ImageDimensions | null {
+  if (!buffer || buffer.length < 10) return null;
+
+  try {
+    // 1. PNG: Dimensions in IHDR chunk (offset 16 and 20, 32-bit big-endian)
+    if (buffer.length >= 24 && buffer.toString("ascii", 12, 16) === "IHDR") {
+      const width = buffer.readUInt32BE(16);
+      const height = buffer.readUInt32BE(20);
+      return { width, height };
+    }
+
+    // 2. GIF: Dimensions in logical screen descriptor (offset 6 and 8, 16-bit little-endian)
+    if (
+      buffer.length >= 10 &&
+      (buffer.toString("ascii", 0, 6) === "GIF87a" ||
+        buffer.toString("ascii", 0, 6) === "GIF89a")
+    ) {
+      const width = buffer.readUInt16LE(6);
+      const height = buffer.readUInt16LE(8);
+      return { width, height };
+    }
+
+    // 3. WebP: RIFF...WEBP
+    if (
+      buffer.length >= 30 &&
+      buffer.toString("ascii", 0, 4) === "RIFF" &&
+      buffer.toString("ascii", 8, 12) === "WEBP"
+    ) {
+      const chunkType = buffer.toString("ascii", 12, 16);
+
+      // Lossy VP8
+      if (chunkType === "VP8 ") {
+        if (
+          buffer[23] === 0x9d &&
+          buffer[24] === 0x01 &&
+          buffer[25] === 0x2a
+        ) {
+          const width = buffer.readUInt16LE(26) & 0x3fff;
+          const height = buffer.readUInt16LE(28) & 0x3fff;
+          return { width, height };
+        }
+      }
+      // Lossless VP8L
+      else if (chunkType === "VP8L" && buffer[20] === 0x2f) {
+        const b0 = buffer[21];
+        const b1 = buffer[22];
+        const b2 = buffer[23];
+        const b3 = buffer[24];
+        const width = 1 + (((b1 & 0x3f) << 8) | b0);
+        const height =
+          1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6));
+        return { width, height };
+      }
+      // Extended VP8X
+      else if (chunkType === "VP8X") {
+        const width =
+          1 + buffer[24] + (buffer[25] << 8) + (buffer[26] << 16);
+        const height =
+          1 + buffer[27] + (buffer[28] << 8) + (buffer[29] << 16);
+        return { width, height };
+      }
+    }
+
+    // 4. JPEG: Sequential marker scanning for SOF (Start of Frame)
+    if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+      let offset = 2;
+      while (offset < buffer.length - 1) {
+        if (buffer[offset] !== 0xff) {
+          offset++;
+          continue;
+        }
+        const marker = buffer[offset + 1];
+        if (marker === 0xff) {
+          offset++;
+          continue;
+        }
+        // Stop scanning if SOS (0xDA) or EOI (0xD9) is encountered
+        if (marker === 0xd9 || marker === 0xda) {
+          break;
+        }
+        if (offset + 4 > buffer.length) break;
+        const segLen = buffer.readUInt16BE(offset + 2);
+
+        // SOF markers: 0xC0..0xCF except 0xC4, 0xC8, 0xCC
+        const isSof =
+          marker >= 0xc0 &&
+          marker <= 0xcf &&
+          marker !== 0xc4 &&
+          marker !== 0xc8 &&
+          marker !== 0xcc;
+
+        if (isSof && offset + 9 <= buffer.length) {
+          const height = buffer.readUInt16BE(offset + 5);
+          const width = buffer.readUInt16BE(offset + 7);
+          return { width, height };
+        }
+
+        offset += 2 + segLen;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+/**
+ * Validates that image dimensions do not exceed resource exhaustion limits.
+ * Protects against decompression bombs and oversized canvas memory allocation.
+ */
+export function validateImageDimensions(
+  buffer: Buffer
+): { valid: boolean; width?: number; height?: number; error?: string } {
+  const dimensions = getImageDimensions(buffer);
+
+  if (!dimensions || !dimensions.width || !dimensions.height) {
+    return {
+      valid: false,
+      error: "Unable to parse image dimensions. File may be corrupted or malformed.",
+    };
+  }
+
+  const { width, height } = dimensions;
+
+  if (width <= 0 || height <= 0) {
+    return {
+      valid: false,
+      error: `Invalid image dimensions (${width}x${height}). Dimensions must be positive non-zero integers.`,
+    };
+  }
+
+  if (width > MAX_IMAGE_WIDTH || height > MAX_IMAGE_HEIGHT) {
+    return {
+      valid: false,
+      width,
+      height,
+      error: `Image dimensions (${width}x${height} px) exceed maximum permitted limit of ${MAX_IMAGE_WIDTH}x${MAX_IMAGE_HEIGHT} px.`,
+    };
+  }
+
+  const totalPixels = width * height;
+  if (totalPixels > MAX_IMAGE_PIXELS) {
+    return {
+      valid: false,
+      width,
+      height,
+      error: `Total image pixels (${totalPixels.toLocaleString()} px) exceed maximum limit of ${MAX_IMAGE_PIXELS.toLocaleString()} px.`,
+    };
+  }
+
+  return { valid: true, width, height };
+}
 
 /**
  * Generates a structured, unique storage key:
@@ -106,7 +381,7 @@ export function generateR2StorageKey(
     ext = ALLOWED_IMAGE_TYPES[mimeType];
   } else if (originalFilename) {
     const rawExt = path.extname(originalFilename).toLowerCase();
-    if ([".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".avif"].includes(rawExt)) {
+    if ([".jpg", ".jpeg", ".png", ".webp", ".gif"].includes(rawExt)) {
       ext = rawExt === ".jpeg" ? ".jpg" : rawExt;
     } else {
       ext = ".webp";
@@ -152,8 +427,20 @@ export async function uploadFileToR2(options: R2UploadOptions): Promise<R2Upload
   // Validate MIME type
   if (!ALLOWED_IMAGE_TYPES[contentType]) {
     throw new Error(
-      `Unsupported file MIME type: "${contentType}". Allowed formats: JPG, PNG, WebP, GIF, SVG, AVIF.`
+      `Unsupported file MIME type: "${contentType}". Allowed formats: JPG, PNG, WebP, GIF.`
     );
+  }
+
+  // Verify binary magic bytes
+  const magicValidation = validateImageBuffer(buffer, contentType);
+  if (!magicValidation.valid) {
+    throw new Error(magicValidation.error || "Invalid file content format.");
+  }
+
+  // Verify image dimensions (bounds memory, prevents decompression bombs)
+  const dimensionValidation = validateImageDimensions(buffer);
+  if (!dimensionValidation.valid) {
+    throw new Error(dimensionValidation.error || "Invalid image dimensions.");
   }
 
   const { client, bucketName } = getR2Client();
@@ -162,7 +449,7 @@ export async function uploadFileToR2(options: R2UploadOptions): Promise<R2Upload
     Bucket: bucketName,
     Key: key,
     Body: buffer,
-    ContentType: contentType,
+    ContentType: magicValidation.detectedMime || contentType,
     Metadata: metadata,
   });
 
